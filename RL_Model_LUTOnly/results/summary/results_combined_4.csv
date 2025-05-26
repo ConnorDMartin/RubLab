@@ -1,0 +1,2 @@
+DESIGN_NAME,BASE_OPERATOR,DESIGN_TYPE,PRUNING_INIT,Config,Constraint,CPD,Delay_logic,Delay_signal,LUTs,Carries,Signal_power,Logic_power,Total_power,Signal_power_top,Logic_power_top,Total_power_top,Conf,average_error,average_absolute_error,average_relative_error,average_absolute_relative_error,acutal_max_error,actual_min_error,error_prob_approx
+SIGNED_ADD_8x8_8_OvErr_BASE_v1_config_3155,SIGNED_ADD_8x8_8,OvErr_BASE,v1,3155,7,0.844,0.365,0.579,8,2,0,30.589,20.589,179.19,48.219,227.409, High,45,93.97058105,1.018078087,1.9569842027970332,316,-194,99.93133544921875
