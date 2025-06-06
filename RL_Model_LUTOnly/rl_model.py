@@ -63,9 +63,23 @@ class Env:
         
         self.initial_error = avg_error
     
-    def reset(self):
-        self.state = copy.deepcopy(self.init_state)
-        return self.init_state
+    def reset(self, episodes_elapsed, state_num):
+        if episodes_elapsed == 5:
+            # print("Creating new state")
+            # print(self.state)
+            inter_state = generate_state(state_num)
+            inter_state = preprocess_state(inter_state)
+            # print(inter_state)
+            self.state = copy.deepcopy(inter_state)
+            # print(self.state)
+
+            print("Getting Initial Error")
+            avg_error = get_error(self.state)
+            print("Initial Error: "+str(avg_error))
+            self.initial_error = avg_error
+        else:
+            self.state = copy.deepcopy(self.init_state)
+        return self.state, self.initial_error
     
     def step(self, action):
 
@@ -99,11 +113,12 @@ class Env:
         print("Error: "+str(avg_error))
 
 
-        reward = (abs(self.initial_error) - abs(avg_error)) # Reward from current state
-        done = 1 if (abs(avg_error) < (0.2 * self.initial_error)) else 0 # Episode ends if target is reached
+        reward = 100 * (abs(self.initial_error) - abs(avg_error)) / abs(self.initial_error) # Reward from current state
+        done = 1 if (abs(avg_error) < (0.1 * self.initial_error)) else 0 # Episode ends if target is reached
 
         if reward < 0:
-            reward = reward/10
+            # reward = reward / 10
+            reward = 0
 
         return np.array(self.state).flatten(), reward, done, avg_error
 
@@ -126,11 +141,12 @@ class Agent:
         self.gamma = 0.95 #discount factor
         self.epsilon = 1.0 #exploration rate
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.9995
+        self.epsilon_decay = 0.999995
         self.learning_rate = 0.01
         self.batch_size = 4
 
         self.model = self.build_model()
+        self.lut_mask, self.bit_mask = self.get_action_mask(input_state)
 
     def build_model(self):
 
@@ -141,9 +157,10 @@ class Agent:
         x = tf.keras.layers.Dense(512, activation="relu")(x)
         x = tf.keras.layers.Dense(256, activation='relu')(x)
 
-
-        lut_head = tf.keras.layers.Dense(8, name = "lut")(x)
-        bit_head = tf.keras.layers.Dense(64, name = "bit")(x)
+        x_1 = tf.keras.layers.Dense(128, activation='relu')(x)
+        lut_head = tf.keras.layers.Dense(8, name = "lut")(x_1)
+        x_2 = tf.keras.layers.Dense(128, activation='relu')(x)
+        bit_head = tf.keras.layers.Dense(64, name = "bit")(x_2)
 
         model = tf.keras.Model(inputs = input, outputs = [lut_head, bit_head])
 
@@ -162,23 +179,24 @@ class Agent:
         # else:
         #     q_values = self.model.predict(state.reshape(1, 8, 77), verbose=0)
         #     return [np.argmax(ind_q_values[0]) for ind_q_values in q_values] #best action (exploitation)
-        lut_mask, bit_mask = self.get_action_mask(state)
-        
-        if np.random.rand() <= self.epsilon:
-            valid_idx_lut = np.argwhere(lut_mask == 1)
-            valid_idx_bit = np.argwhere(bit_mask == 1)
-            
+
+        if np.random.rand() <= self.epsilon: #random action (exploration)
+            valid_idx_lut = np.argwhere(self.lut_mask == 1)
+            valid_idx_bit = np.argwhere(self.bit_mask == 1)
+
             selected_lut = valid_idx_lut[random.randint(0, len(valid_idx_lut) - 1)]
             selected_bit = valid_idx_bit[random.randint(0, len(valid_idx_bit) - 1)]
 
             return [int(selected_lut), int(selected_bit)]
-        else:
+        else: #best action (exploitation)
             q_values = self.model.predict(state.reshape(1, 8, 77), verbose=0)
-            masked_q_values_lut, masked_q_values_bit = self.mask_logits(q_values, lut_mask, bit_mask)
+            masked_q_values_lut, masked_q_values_bit = self.mask_logits(q_values, self.lut_mask, self.bit_mask)
             lut_idx = int(np.argmax(masked_q_values_lut))
             bit_idx = int(np.argmax(masked_q_values_bit))
 
             return [lut_idx, bit_idx]
+
+
     
     def train(self):
         if len(self.memory) < self.batch_size:
@@ -222,11 +240,12 @@ class Agent:
             self.epsilon *= self.epsilon_decay
 
     
-    def log_memory(self, state, error, episode, step, reward):
+    def log_memory(self, state, error, episode, step, reward, initial_error):
         state = state.reshape(8, 77)
 
         filename = './results/summary/run_summary.csv'
         with open(filename,"a") as summary_file:
+            summary_file.write("\n")
             summary_file.write("Episode "+str(episode)+" Step "+str(step)+":\n")
             # print(state)
             # summary_file.write(state)
@@ -246,21 +265,23 @@ class Agent:
 
             summary_file.write('\n')
             summary_file.write("Error: "+str(error)+"\n")
+            summary_file.write("Initial Error: "+str(initial_error)+"\n")
             summary_file.write("Reward: "+str(reward)+"\n")
             summary_file.write("Exploration Rate: "+str(self.epsilon)+"\n")
+            summary_file.write("\n")
 
 
 
         return
     
 
-    # determine action masking based on values of input state
-    def get_action_mask(state):
+# determine action masking based on values of input state
+    def get_action_mask(self, state):
         inter_state = state.reshape(8, 77)
-        lut_mask = np.ones((1, 8), dtype=np.float32)
-        init_mask = np.ones((1, 64), dtype=np.float32)
+        lut_mask = np.ones((8), dtype=np.float32)
+        init_mask = np.ones((64), dtype=np.float32)
         state_tracker = [[1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0]]
-        
+
         for i_ in range(0,8):
             if inter_state[i_][-1] == 0:
                 lut_mask[i_] = 0
@@ -274,38 +295,43 @@ class Agent:
                         state_tracker[indx][1] = channel
                         state_tracker[indx][2] = selection
                     else:
-                        if state_tracker[indx][1] != channel:
+                        if (state_tracker[indx][1] != channel) and (inter_state[i_][-1] != 0):
                             state_tracker[indx][0] = 0
-                        elif (state_tracker[indx][1] == 0) and (state_tracker[indx][2] != selection):
+                        elif (state_tracker[indx][1] == 0) and (state_tracker[indx][2] != selection) and (inter_state[i_][-1] != 0):
+                            state_tracker[indx][0] = 0
+                        elif (channel == 1) or (channel == 2):
                             state_tracker[indx][0] = 0
 
                     indx+=1
 
+        print("state tracker: " + str(state_tracker))
         i_ = 0
         while (i_ < 6):
             if i_ == 0:
-                if (state_tracker[0] == 1 ) and (state_tracker[1] == 0):
-                    if (state_tracker[2] == 0):
+                if (state_tracker[i_][0] == 1 ) and (state_tracker[i_][1] == 0):
+                    if (state_tracker[i_][2] == 0):
+                        # print("Changing Mask 1")
                         init_mask[31:63] = [0] * (63-31)
 
             else:
-                if (state_tracker[0] == 1) and (state_tracker[1] == 0):
+                if (state_tracker[i_][0] == 1) and (state_tracker[i_][1] == 0):
+                    # print("Changing Mask 2")
                     iter_ = 0
                     while iter_  < 64:
-                        if state_tracker[2] == 1:
+                        if state_tracker[i_][2] == 1:
                             iter_ += (2**(5 - i_))
 
                         for n_ in range(2**(5 - i_)):
                             init_mask[iter_ + n_] = 0
-                        
+
                         iter_ += 2 * (2**(5 - i_))
+            i_+=1
 
         return lut_mask, init_mask
-            
-        
 
 
-    def mask_logits(logits, lut_mask, bit_mask):
+
+    def mask_logits(self, logits, lut_mask, bit_mask):
         lut_logits, bit_logits = logits # (1, 8), (1, 64)
 
         masked_lut_logits = np.where(lut_mask == 1.0, lut_logits, -1e9)
@@ -435,6 +461,43 @@ def display_data(LUT_size):
     plt.ylabel("PPA")
     plt.show()
 
+def generate_state(state_num):
+    state = [[0x6666666688888888, [[0, 1], [0, 0], [2, 1], [1, 1], [2, 0], [1, 0]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 2], [1, 2], [2, 1], [1, 1]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 3], [1, 3], [2, 2], [1, 2]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 4], [1, 4], [2, 3], [1, 3]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 5], [1, 5], [2, 4], [1, 4]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 6], [1, 6], [2, 5], [1, 5]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 7], [1, 7], [2, 6], [1, 6]], 1], [0x6666666688888888, [[0, 1], [0, 0], [0, 0], [0, 0], [2, 7], [1, 7]], 1]]
+    # num_disabled = random.randint(1, 3)
+    # disabled_luts = []
+    # for i in range(num_disabled):
+    #     dis_ = random.randint(0, 7)
+    #     while dis_ in disabled_luts:
+    #         dis_ = random.randint(0, 7)
+    #     state[dis_][-1] = 0
+
+    match state_num:
+        case state_num if 0 <= state_num < 8:
+            num_disabled = 1
+            state[state_num][-1] = 0
+
+        case state_num if 8 <= state_num < 36:
+            num_disabled = 2
+            disabled_luts = []
+            for i in range(num_disabled):
+                dis_ = random.randint(0, 7)
+                while dis_ in disabled_luts:
+                    dis_ = random.randint(0, 7)
+                state[dis_][-1] = 0
+
+
+        case state_num if 36 <= state_num < 92:
+            num_disabled = 3
+            disabled_luts = []
+            for i in range(num_disabled):
+                dis_ = random.randint(0, 7)
+                while dis_ in disabled_luts:
+                    dis_ = random.randint(0, 7)
+                state[dis_][-1] = 0
+
+
+    return state
+
 
 
 
@@ -444,7 +507,11 @@ empty_compressed_lut = preprocess_state([empty_lut])[0]
 # print("Empty compressed lut: "+str(empty_compressed_lut)+"\n") ## debugging print ##
 
 #for debugging:
-input_state = [[0x6666666688888888, [[0, 1], [0, 0], [2, 1], [1, 1], [2, 0], [1, 0]], 1], [0x0000000000000000, [[0, 1], [0, 0], [2, 2], [1, 2], [2, 1], [1, 1]], 0], [0x6666666688888888, [[0, 1], [0, 0], [2, 3], [1, 3], [2, 2], [1, 2]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 4], [1, 4], [2, 3], [1, 3]], 1], [0x0000000000000000, [[0, 1], [0, 0], [2, 5], [1, 5], [2, 4], [1, 4]], 0], [0x6666666688888888, [[0, 1], [0, 0], [2, 6], [1, 6], [2, 5], [1, 5]], 1], [0x6666666688888888, [[0, 1], [0, 0], [0, 0], [0, 0], [2, 6], [1, 6]], 1], [0x6666666688888888, [[0, 1], [0, 0], [0, 0], [0, 0], [2, 7], [1, 7]], 1]]
+# input_state = [[0x6666666688888888, [[0, 1], [0, 0], [2, 1], [1, 1], [2, 0], [1, 0]], 1], [0x0000000000000000, [[0, 1], [0, 0], [2, 2], [1, 2], [2, 1], [1, 1]], 0], [0x6666666688888888, [[0, 1], [0, 0], [2, 3], [1, 3], [2, 2], [1, 2]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 4], [1, 4], [2, 3], [1, 3]], 1], [0x0000000000000000, [[0, 1], [0, 0], [2, 5], [1, 5], [2, 4], [1, 4]], 0], [0x6666666688888888, [[0, 1], [0, 0], [2, 6], [1, 6], [2, 5], [1, 5]], 1], [0x6666666688888888, [[0, 1], [0, 0], [2, 7], [1, 7], [2, 6], [1, 6]], 1], [0x6666666688888888, [[0, 1], [0, 0], [0, 0], [0, 0], [2, 7], [1, 7]], 1]]
+state_num = 0
+input_state = generate_state(state_num)
+state_num += 1
+
 #end debugging
 
 print("Flag 1\n") ## Debugging Flag ##
@@ -461,23 +528,37 @@ print("Flag 3\n") ## Debugging Flag ##
 agent = Agent(input_state)
 
 episodes = 2000  ## SWITCH TO 1000 WHEN NOT DEBUGGING ##
+episodes_elapsed = 0
 # episodes = 1 # for debugging
 
 print("Flag 4\n") ## Debugging Flag ##
 for episode in range(episodes):
-    state = env.reset()
+    state, initial_error = env.reset(episodes_elapsed, state_num)
+    print("\n\n Episode: "+str(episode))
+    if (episodes_elapsed == 5):
+        # print(state)
+        # print("Creating New Mask")
+        Agent.lut_mask, Agent.bit_mask = Agent.get_action_mask(Agent, state)
+
+        episodes_elapsed = 0
+        state_num += 1
+        if state_num == 92:
+            state_num = 0
+
+    episodes_elapsed += 1
+
     total_reward = 0
     done = 0
 
     print("Flag 5\n") ## Debugging Flag ##
-    for step in range(50):   # Done state is either n steps or done is triggered
+    for step in range(550):   # Done state is either n steps or done is triggered
         action = agent.act(state)
         next_state, reward, done, error = env.step(action) ## Disabled for Debugging ##
 
         agent.remember(state, action, reward, next_state, done)
         agent.train()  ## Disabled for Debugging ##
 
-        agent.log_memory(state, error, episode, step, reward)
+        agent.log_memory(state, error,episode, step, reward, initial_error)
 
         state = next_state
         total_reward += reward

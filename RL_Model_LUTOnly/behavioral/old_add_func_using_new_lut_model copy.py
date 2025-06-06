@@ -11,9 +11,10 @@ import itertools # for generating binary strings for dropping LUTs
 from behavioral.integer_to_comb import integer_to_combination
 # from integer_to_comb import integer_to_combination
 import re
+from multiprocessing import Pool
 
 
-def adder(input_port_assignments, lut_string_inst, Lut_INIT_List, bit_width, arg1, arg2, enabled):
+def adder(input_port_assignments, lut_string_inst, Lut_INIT_List, bit_width, arg1, arg2, enabled, testing_data):
 
     # bit_width = 8
 
@@ -43,7 +44,6 @@ def adder(input_port_assignments, lut_string_inst, Lut_INIT_List, bit_width, arg
     lut_list = []
     pps_list = []
     error_total = 0
-    error_count = 0
     iteration = 0
 
 
@@ -58,87 +58,31 @@ def adder(input_port_assignments, lut_string_inst, Lut_INIT_List, bit_width, arg
             lut_list[mtd].set_valid('Z')
 
 
-    # with open("../testing_values.csv","r",newline='') as state_file:
-    with open("testing_values.csv","r",newline='') as state_file:
-        reader = csv.reader(state_file)
-        pattern = r"[0-9]+"
+    # with open("testing_values.csv","r",newline='') as state_file:
+    # with open("testing_values.csv","r",newline='') as state_file:
+        # reader = csv.reader(state_file)
+        # pattern = r"[0-9]+"
 
-        iteration = 0
-        for row in reader:
-            if (iteration == 250) or (iteration == 500) or (iteration == 750) or (iteration == 999):
-                print(".")
+    args = []
+    num_slices = 10
 
-            arg1, arg2 = re.findall(pattern, str(row))
-            # print(arg1)
-            # print(arg2)
-            arg1 = int(arg1)
-            arg2 = int(arg2)
-            # print("lut: " +str(lut_result))
-            real_result = arg1 + arg2
-            # print("real: " + str(real_result))
-            op1 = arg1
-            op2 = arg2
-            pps_list = []
+    # calc_error_wrapper(data_slice, bit_width, input_port_assignments, lut_list)
 
-            # print("Arg1: "+str(arg1))
-            # print("Arg2: "+str(arg2))
+    slice_width = len(testing_data) // num_slices
 
-            op1_bin_temp = str(fxp(op1, m=bit_width, str_base=2))
-            op2_bin_temp = str(fxp(op2, m=bit_width, str_base=2))
+    current_indx = 0
+    for i in range(num_slices):
+        args.append((testing_data[current_indx:current_indx + slice_width] , bit_width, input_port_assignments, lut_list))
+        current_indx = current_indx + slice_width
+    
 
-            op1_bin = [L[::-1] for L in op1_bin_temp] # to reverse the list for easy access
-            op2_bin = [L[::-1] for L in op2_bin_temp]
+    with Pool(processes=num_slices) as pool:
+        results = pool.starmap(calc_error_wrapper, args)
+
+    error_total = np.sum(results)
 
 
-            op1_bin.reverse()
-            op2_bin.reverse()
-            # convert list of str to list of int
-            op1_bin = [1 if value == '1' else 0 for value in op1_bin]
-            op2_bin = [1 if value == '1' else 0 for value in op2_bin]
-
-
-            for mtd in range(0, bit_width):
-                assignments = input_port_assignments[mtd]
-                in_a = find_input(5, assignments, op1_bin, op2_bin)
-                in_b = find_input(4, assignments, op1_bin, op2_bin)
-                in_c = find_input(3, assignments, op1_bin, op2_bin)
-                in_d = find_input(2, assignments, op1_bin, op2_bin)
-                in_e = find_input(1, assignments, op1_bin, op2_bin)
-                in_f = find_input(0, assignments, op1_bin, op2_bin)
-                # print(in_a, in_b, in_c, in_d, in_e, in_f)
-                # print(hex(Lut_INIT_List[mtd]))
-                lut_list[mtd].get_lut_outputs(in_a, in_b, in_c, in_d, in_e, in_f)
-                lut_list[mtd].get_sum_carry(lut_list[mtd-1].cout)
-                # print("Cout: "+str(lut_list[mtd].cout))
-
-            for i in range(len(lut_list)):
-                pps_list.insert(0, lut_list[i].sum)
-                if i == len(lut_list)-1:
-                    pps_list.insert(0, lut_list[i].cout)
-
-            # print(pps_list)
-
-            pps_int = []
-            sum = 0 # to store the sum
-            num_elem = len(pps_list) # to find power of 2, I need maximum number of elements
-
-            for elem in pps_list:   # access elements of sub_list
-                num_elem = num_elem - 1
-                if num_elem == len(pps_list)-1:
-                    sum = sum - elem * np.power(2, num_elem)
-                else:
-                    sum = sum + elem * np.power(2, num_elem)
-
-            # print(sum)
-            # print(real_result)
-            error = sum - real_result
-
-            error_total += error
-            error_count += 1
-
-            iteration += 1
-
-    return error_total/error_count
+    return error_total/len(testing_data)
     # return error_total/error_count
 
 
@@ -251,6 +195,104 @@ def find_input(x, assignments, op1_bin, op2_bin):
         return op2_bin[op_bit]
     else:
         return op_bit
+    
+def calc_error_wrapper(data_slice, bit_width, input_port_assignments, lut_list):
+    iteration = 0
+    while iteration < len(data_slice):
+        # args = []
+        error_total = 0
+
+        # error = calc_error(arg1, arg2, iteration, bit_width, input_port_assignments, lut_list)
+        for i in range(10):
+            curr_iter = iteration + i
+            arg1 = data_slice[curr_iter][0]
+            arg2 = data_slice[curr_iter][1]
+            # args.append((arg1, arg2, iteration + i, bit_width, input_port_assignments, lut_list))
+
+            error_total += calc_error(arg1, arg2, iteration + i, bit_width, input_port_assignments, lut_list)
+
+
+        # with Pool(processes=10) as pool:
+        #     results = pool.starmap(calc_error, args)
+
+        # error_total = np.sum(results)
+
+        iteration += 10
+
+    return error_total
+
+
+def calc_error(arg1, arg2, iteration, bit_width, input_port_assignments, lut_list):
+        # if (iteration == 250) or (iteration == 500) or (iteration == 750) or (iteration == 999):
+        #     print(".")
+
+        # arg1, arg2 = re.findall(pattern, str(row))
+
+        # print(arg1)
+        # print(arg2)
+        arg1 = int(arg1)
+        arg2 = int(arg2)
+        # print("lut: " +str(lut_result))
+        real_result = arg1 + arg2
+        # print("real: " + str(real_result))
+        op1 = arg1
+        op2 = arg2
+        pps_list = []
+
+        # print("Arg1: "+str(arg1))
+        # print("Arg2: "+str(arg2))
+
+        op1_bin_temp = str(fxp(op1, m=bit_width, str_base=2))
+        op2_bin_temp = str(fxp(op2, m=bit_width, str_base=2))
+
+        op1_bin = [L[::-1] for L in op1_bin_temp] # to reverse the list for easy access
+        op2_bin = [L[::-1] for L in op2_bin_temp]
+
+
+        op1_bin.reverse()
+        op2_bin.reverse()
+        # convert list of str to list of int
+        op1_bin = [1 if value == '1' else 0 for value in op1_bin]
+        op2_bin = [1 if value == '1' else 0 for value in op2_bin]
+
+
+        for mtd in range(0, bit_width):
+            assignments = input_port_assignments[mtd]
+            in_a = find_input(5, assignments, op1_bin, op2_bin)
+            in_b = find_input(4, assignments, op1_bin, op2_bin)
+            in_c = find_input(3, assignments, op1_bin, op2_bin)
+            in_d = find_input(2, assignments, op1_bin, op2_bin)
+            in_e = find_input(1, assignments, op1_bin, op2_bin)
+            in_f = find_input(0, assignments, op1_bin, op2_bin)
+            # print(in_a, in_b, in_c, in_d, in_e, in_f)
+            # print(hex(Lut_INIT_List[mtd]))
+            lut_list[mtd].get_lut_outputs(in_a, in_b, in_c, in_d, in_e, in_f)
+            lut_list[mtd].get_sum_carry(lut_list[mtd-1].cout)
+            # print("Cout: "+str(lut_list[mtd].cout))
+
+        for i in range(len(lut_list)):
+            pps_list.insert(0, lut_list[i].sum)
+            if i == len(lut_list)-1:
+                pps_list.insert(0, lut_list[i].cout)
+
+        # print(pps_list)
+
+        pps_int = []
+        sum = 0 # to store the sum
+        num_elem = len(pps_list) # to find power of 2, I need maximum number of elements
+
+        for elem in pps_list:   # access elements of sub_list
+            num_elem = num_elem - 1
+            if num_elem == len(pps_list)-1:
+                sum = sum - elem * np.power(2, num_elem)
+            else:
+                sum = sum + elem * np.power(2, num_elem)
+
+        # print(sum)
+        # print(real_result)
+        error = sum - real_result
+
+        return error
 
 
 

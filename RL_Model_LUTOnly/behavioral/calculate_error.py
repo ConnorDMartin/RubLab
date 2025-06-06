@@ -1,5 +1,5 @@
-# from behavioral.add_func_using_new_lut_model import adder
-from add_func_using_new_lut_model import adder
+from behavioral.add_func_using_new_lut_model import adder
+# from add_func_using_new_lut_model import adder
 import csv
 import re
 import numpy as np
